@@ -201,7 +201,7 @@ int main(int argc, char **argvs) {
         gather_offs_off = new int[num_process];
         CSR_len_displs = new int[num_process];
         for (size_t i = 0; i < num_process; i++) {
-            // printf("process %d has %d results\n", i, gather_size[i]);
+            printf("process %d has %d results\n", i, gather_size[i]);
             total_size += gather_size[i];
             gather_offs_num[i] = gather_size[i] + 1;
             gather_offs_off[i] = offset;
@@ -215,12 +215,20 @@ int main(int argc, char **argvs) {
         gather_CSR_offs = new int[total_size + num_process];
     }
 
+    
+
     // 尝试接收长度，而非offset。接收长度方便，收到后再处理
     // MPI_Gatherv(local_supermers_CSR_offs, local_size + 1, MPI_INT, gather_CSR_offs, gather_offs_num, gather_offs_off, MPI_INT, 0, comm);
 
-    int gather_CSR_len[total_size];
+    int *gather_CSR_len;
+    if(my_rank == 0){
+        gather_CSR_len = new int[total_size];
+    }
+    
+
     MPI_Gatherv(local_supermers_CSR_len.data(), local_size, MPI_INT, gather_CSR_len, gather_size, CSR_len_displs, MPI_INT, 0, comm);
     
+
     int total_CSR_len = 0;
     char* gather_CSR;
     int *recvcount, *displs;
@@ -229,48 +237,39 @@ int main(int argc, char **argvs) {
         //     printf("result[%d] from (%d, %d)\n", i-1, gather_CSR_offs[i-1], gather_CSR_offs[i]);
         // }
 
-        recvcount = new int[num_process];
-        displs = new int[num_process];
+        recvcount = new int[num_process]();
+        displs = new int[num_process]();
         int offset = 0;
         for (size_t i = 0, j = 0; i < num_process; i++) {
-            
             for (size_t k = 0; k < gather_size[i]; k++, j++) {
                 // printf("process %d has %d results, result[%d] len = %d\n", i, gather_size[i], j, gather_CSR_len[j]);
                 total_CSR_len += gather_CSR_len[j];
                 recvcount[i] += gather_CSR_len[j];
             }
-
             displs[i] += offset;
             offset += recvcount[i];
         }
         
         gather_CSR = new char[total_CSR_len + 10];
-        for (size_t i = 0, j = 0; i < num_process; i++) {
-            printf("%d %d %d %d\n", i, recvcount[i], displs[i], total_CSR_len);
-        }   
+        // for (size_t i = 0; i < num_process; i++) {
+        //     printf("%d %d %d %d\n", i, recvcount[i], displs[i], total_CSR_len);
+        // }
     }
+
+    
     
     int len = local_supermers_CSR_offs[local_size] - local_supermers_CSR_offs[0];
-    printf("%d %d %s\n",my_rank, len, local_supermers_CSR);
+    // printf("%d %d %s\n",my_rank, len, local_supermers_CSR);
     MPI_Gatherv(local_supermers_CSR, len, 
         MPI_CHAR, gather_CSR, recvcount, displs, MPI_CHAR, 0, comm); 
     
     if(my_rank == 0){
         gather_CSR[total_CSR_len] = '\0';
-        printf("%s\n", gather_CSR);
+        // printf("%s\n", gather_CSR);
 
-        printf("size %d\n", all_supermers.size());
-    }
-    
-    if(my_rank == 0){
-        for (size_t i = 0, j = 0, p = 0; i < num_process; i++) { 
+        for (size_t i = 0, j = 0, p = 0; i < num_process; i++) {
             for (size_t k = 0; k < gather_size[i]; k++, j++) {
-                // for(int q = p; q < p + gather_CSR_len[j]; q++){
-                //     printf("%c", gather_CSR[q]);
-                // }
-                // puts("");
                 string s(gather_CSR + p, gather_CSR_len[j]);
-                cout << s << endl;
                 all_supermers.emplace_back(s);
                 p += gather_CSR_len[j];
             }
@@ -283,13 +282,10 @@ int main(int argc, char **argvs) {
         delete []gather_CSR;
         delete []recvcount;
         delete []displs;
+        delete []gather_CSR_len;
 
     }
     
-   
-
-    
-
 
 
     // for (size_t i = 0; i < strlen(gather_CSR); i++){
