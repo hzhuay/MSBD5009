@@ -8,7 +8,6 @@
 #define _out_
 #define _MPI_TEST_
 // #define DEBUG
-#include <unistd.h>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -26,7 +25,6 @@ using namespace std;
 void read2supermers(const char* _read, int read_len, int k, int p, _out_ vector<string> &supermers);
 
 const int MAX_PROCESS = 64;
-const int RECV_BUFF = 1 << 25;
 int K, P;
 
 int main(int argc, char **argvs) {
@@ -90,10 +88,6 @@ int main(int argc, char **argvs) {
     int *task_len = nullptr, *task_num = nullptr, *task_offset = nullptr;
     int *reads_offs_off = nullptr, *reads_offs_len = nullptr;
     if (my_rank == 0) {
-        // for(int i = 0; i <= num_of_reads; i++){
-        //     printf("%d ", reads_CSR_offs[i]);
-        // }
-        // puts("");
         
         task_len = new int[num_process]();
         task_num = new int[num_process];
@@ -161,9 +155,7 @@ int main(int argc, char **argvs) {
     int *local_supermers_CSR_offs;
     vector<int> local_supermers_CSR_len(local_size);
     Vector2CSR(local_supermers, local_size, local_supermers_CSR, local_supermers_CSR_offs);
-    // for(int i = 0; i<=local_size; i++){
-    //     printf("process %d, offs[%d] = %d\n", my_rank, i, local_supermers_CSR_offs[i]);
-    // }
+
 
     local_supermers_CSR[local_supermers_CSR_offs[local_size]] = '\0';
 
@@ -171,19 +163,8 @@ int main(int argc, char **argvs) {
         local_supermers_CSR_len[i] = local_supermers[i].size();
     }
 
-    // printf("this is process %d, range (%d, %d), %d results\n", my_rank, local_offs[0], local_offs[local_reads_num], local_size);
-    
-    // if(my_rank == 1){
-    //     for(size_t i = 0; i < local_size; i++){
-    //         printf("process %d, super[%d] = %s, range (%d, %d)\n", my_rank, i,
-    //             string(local_supermers_CSR + local_supermers_CSR_offs[i], local_supermers_CSR_offs[i+1] - local_supermers_CSR_offs[i]).c_str(), 
-    //             local_supermers_CSR_offs[i], local_supermers_CSR_offs[i+1]);
-    //     }
-    // }
-    
-
     // gather汇总任务
-    int *gather_size, *gather_CSR_offs;
+    int *gather_size;
     if(my_rank == 0){
         gather_size = new int[num_process];
         
@@ -191,40 +172,26 @@ int main(int argc, char **argvs) {
     // 每个进程返回答案数量
     MPI_Gather(&local_size, 1, MPI_INT, gather_size, 1, MPI_INT, 0, comm);
     
-
-    int *gather_offs_num = nullptr, *gather_offs_off = nullptr;
     int total_size = 0;
     int *CSR_len_displs;
+    int *gather_CSR_len;
     if(my_rank == 0) {
-        int offset = 0, offset2 = 0;
-        gather_offs_num = new int[num_process];
-        gather_offs_off = new int[num_process];
+        int offset = 0;
+
         CSR_len_displs = new int[num_process];
         for (size_t i = 0; i < num_process; i++) {
             printf("process %d has %d results\n", i, gather_size[i]);
             total_size += gather_size[i];
-            gather_offs_num[i] = gather_size[i] + 1;
-            gather_offs_off[i] = offset;
-            offset += gather_offs_num[i];
-
-            CSR_len_displs[i] = offset2;
-            offset2 += gather_size[i];
+            CSR_len_displs[i] = offset;
+            offset += gather_size[i];
         }
 
         printf("total results = %d\n", total_size);
-        gather_CSR_offs = new int[total_size + num_process];
+        gather_CSR_len = new int[total_size];
     }
-
-    
 
     // 尝试接收长度，而非offset。接收长度方便，收到后再处理
     // MPI_Gatherv(local_supermers_CSR_offs, local_size + 1, MPI_INT, gather_CSR_offs, gather_offs_num, gather_offs_off, MPI_INT, 0, comm);
-
-    int *gather_CSR_len;
-    if(my_rank == 0){
-        gather_CSR_len = new int[total_size];
-    }
-    
 
     MPI_Gatherv(local_supermers_CSR_len.data(), local_size, MPI_INT, gather_CSR_len, gather_size, CSR_len_displs, MPI_INT, 0, comm);
     
@@ -233,10 +200,6 @@ int main(int argc, char **argvs) {
     char* gather_CSR;
     int *recvcount, *displs;
     if(my_rank == 0){
-        // for (size_t i = 1; i < total_size + num_process; i++) {
-        //     printf("result[%d] from (%d, %d)\n", i-1, gather_CSR_offs[i-1], gather_CSR_offs[i]);
-        // }
-
         recvcount = new int[num_process]();
         displs = new int[num_process]();
         int offset = 0;
@@ -251,157 +214,26 @@ int main(int argc, char **argvs) {
         }
         
         gather_CSR = new char[total_CSR_len + 10];
-        // for (size_t i = 0; i < num_process; i++) {
-        //     printf("%d %d %d %d\n", i, recvcount[i], displs[i], total_CSR_len);
-        // }
     }
 
-    
-    
     int len = local_supermers_CSR_offs[local_size] - local_supermers_CSR_offs[0];
-    // printf("%d %d %s\n",my_rank, len, local_supermers_CSR);
-    MPI_Gatherv(local_supermers_CSR, len, 
-        MPI_CHAR, gather_CSR, recvcount, displs, MPI_CHAR, 0, comm); 
+    MPI_Gatherv(local_supermers_CSR, len, MPI_CHAR, gather_CSR, recvcount, displs, MPI_CHAR, 0, comm); 
     
     if(my_rank == 0){
         gather_CSR[total_CSR_len] = '\0';
-        // printf("%s\n", gather_CSR);
-
         for (size_t i = 0, j = 0, p = 0; i < num_process; i++) {
             for (size_t k = 0; k < gather_size[i]; k++, j++) {
-                string s(gather_CSR + p, gather_CSR_len[j]);
-                all_supermers.emplace_back(s);
+                all_supermers.emplace_back(gather_CSR + p, gather_CSR_len[j]);
                 p += gather_CSR_len[j];
             }
         }
         delete []gather_size;
-        delete []gather_CSR_offs;
-        delete []gather_offs_num;
-        delete []gather_offs_off;
+        delete []gather_CSR_len;
         delete []CSR_len_displs;
         delete []gather_CSR;
         delete []recvcount;
         delete []displs;
-        delete []gather_CSR_len;
-
     }
-    
-
-
-    // for (size_t i = 0; i < strlen(gather_CSR); i++){
-    //     printf("%d\n", gather_CSR[i]);
-    // }
-
-
-    // vector<string> all_supermers;
-    // for (size_t i = 0; i < total_size; i++) {
-    //     all_supermers.emplace_back(local_reads_CSR + local_offs[i], local_offs[i+1] - local_offs[i]);
-    // }
-
-    
-
-
-    // if (my_rank == 0) {
-    //     int local_num = num_of_reads / num_process;
-    //     // cout << strlen(reads_CSR) << endl;
-    //     // 分配任务
-    //     // printf("send %s\n", reads_CSR);
-    //     for (size_t i = 0; i < num_process; i++) {
-    //         // 给子进程发送任务
-    //         if (i != 0) {
-    //             MPI_Send(&num_of_reads, 1, MPI_INT, i, 0, comm);
-    //             MPI_Send(reads_CSR_offs, num_of_reads + 1, MPI_INT, i, 0, comm);
-    //             MPI_Send(reads_CSR, reads_CSR_offs[num_of_reads], MPI_CHAR, i, 0, comm);
-    //         }
-    //     }
-        
-    //     // 完成自己的任务
-        
-    //     for (int i = my_rank; i < num_of_reads; i += num_process) {
-    //         read2supermers(
-    //             reads_CSR + reads_CSR_offs[i],
-    //             reads_CSR_offs[i + 1] - reads_CSR_offs[i],
-    //             K, P,
-    //             all_supermers
-    //         );
-    //         // printf("this is father %d doing task %d, range (%d, %d) %d\n", my_rank, i, reads_CSR_offs[i], reads_CSR_offs[i+1], all_supermers.size());
-    //     }
-
-
-    //     // 收取任务
-    //     // puts("收任务");
-    //     int* local_offs;
-    //     char* local_reads_CSR;
-        
-    //     for (size_t i = 1; i < num_process; i++) {
-            
-    //         int size;
-    //         MPI_Recv(&size, 1, MPI_INT, i, MPI_ANY_TAG, comm, MPI_STATUS_IGNORE);
-            
-    //         local_offs = (int*)calloc(size, sizeof(int));
-    //         MPI_Recv(local_offs, size + 1, MPI_INT, i, MPI_ANY_TAG, comm, MPI_STATUS_IGNORE);
-
-    //         int supermer_CSR_size = local_offs[size];
-    //         // printf("主进程从%d进程收取任务，数组长度为%d\n，字符串长度为%d\n", i, size, supermer_CSR_size);
-
-    //         local_reads_CSR = (char*)calloc(supermer_CSR_size, sizeof(char));
-    //         MPI_Recv(local_reads_CSR, supermer_CSR_size, MPI_CHAR, i, MPI_ANY_TAG, comm, MPI_STATUS_IGNORE);
-
-    //         vector<string> supermers_local(size);
-    //         for (size_t i = 0; i < size; i++) {
-    //             all_supermers.emplace_back(local_reads_CSR + local_offs[i], local_offs[i + 1] - local_offs[i]);
-    //         }
-
-    //     }
-    //     // puts("排序");
-    //     sort(all_supermers.begin(), all_supermers.end());
-    //     // 释放各种资源
-    //     free(local_offs);
-    //     free(local_reads_CSR);
-
-    // } else {
-        
-    //     MPI_Recv(&num_of_reads, 1, MPI_INT, 0, MPI_ANY_TAG, comm, MPI_STATUS_IGNORE);
-    //     // printf("%d %d\n", my_rank, num_of_reads);
-
-    //     int* local_offs = (int*)calloc(num_of_reads + 1, sizeof(int));
-    //     MPI_Recv(local_offs, num_of_reads + 1, MPI_INT, 0, MPI_ANY_TAG, comm, MPI_STATUS_IGNORE);
-        
-    //     int reads_CSR_size = local_offs[num_of_reads];
-    //     // printf("process %d, csr_size = %d\n", my_rank, reads_CSR_size);
-
-    //     char* local_reads_CSR = (char*)calloc(reads_CSR_size, sizeof(char));
-    //     MPI_Recv(local_reads_CSR, reads_CSR_size, MPI_CHAR, 0, MPI_ANY_TAG, comm, MPI_STATUS_IGNORE);
-    
-        
-    //     vector<string> supermers_local;
-
-    //     for (int i = my_rank; i < num_of_reads; i += num_process) {
-    //         // cout<<string(local_reads_CSR + local_offs[i], local_offs[i + 1] - local_offs[i])<<endl;
-    //         // printf("this is process %d, task %d and string is %s, strlen is %d\n", my_rank, i, string(local_reads_CSR + local_offs[i], local_offs[i+1] - local_offs[i]).c_str(), local_offs[i+1] - local_offs[i]);
-    //         read2supermers(
-    //             local_reads_CSR + local_offs[i],
-    //             local_offs[i + 1] - local_offs[i],
-    //             K, P,
-    //             supermers_local
-    //         );
-    //         // printf("this is child %d doing task %d, range (%d, %d), start at %c, result size %d %s\n", my_rank, i, local_offs[i], local_offs[i+1], local_reads_CSR[local_offs[i]], supermers_local.size(), supermers_local[0].c_str());
-    //     }
-    //     //vector<string>无法直接发送，因此要转换成CSR
-    //     int size = supermers_local.size();
-    //     Vector2CSR(supermers_local, size, reads_CSR, reads_CSR_offs);
-        
-    //     MPI_Send(&size, 1, MPI_INT, 0, 0, comm);
-
-    //     MPI_Send(reads_CSR_offs, size + 1, MPI_INT, 0, 0, comm);
-
-    //     MPI_Send(reads_CSR, reads_CSR_offs[size], MPI_CHAR, 0, 0, comm);
-        
-    //     free(local_offs);
-    //     free(local_reads_CSR);
-       
-    // }
-    
     
     // ==============================================================
     // ====    Write your implementation only above this line    ====

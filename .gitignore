@@ -31,6 +31,6 @@
 *.out
 *.app
 
-result
-./gs
-./seq_gs
+/result/
+gs
+seq_gs
