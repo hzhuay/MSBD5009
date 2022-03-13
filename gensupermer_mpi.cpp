@@ -1,6 +1,6 @@
 // *********************************************************************
-//     [NAME]:    [STUDENT ID]: 
-//     [EMAIL]: 
+//     [NAME]: ZHU Haunqi   [STUDENT ID]: 20786002
+//     [EMAIL]: hzhuay@connect.ust.hk
 //     NOTICE: Write your code only in the specified section.
 // *********************************************************************
 // 7 MAR (update2.1), 28 FEB (update1): UPDATES IN read2supermers(...)
@@ -81,27 +81,23 @@ int main(int argc, char **argvs) {
     // ====    Write your implementation only below this line    ====
     // ==============================================================
 
-    // 通过scatter分发数据，然后大家一起干活，然后gather汇总数据
-    // 注意，分配offset等主进程专属工作应该在0号进程专属代码块里，但是scatter和gather不需要
-
-    // 主进程计算任务
+    // 1. Scatter the read data to each MPI processes.
     int *task_len = nullptr, *task_num = nullptr, *task_offset = nullptr;
     int *reads_offs_off = nullptr, *reads_offs_len = nullptr;
     if (my_rank == 0) {
-        
         task_len = new int[num_process]();
         task_num = new int[num_process];
         task_offset = new int[num_process];
-
         reads_offs_off = new int[num_process + 1];
         reads_offs_len = new int[num_process];
+
         int j = 0, offset = 0, off_offset = 0;
         for (size_t i = 0; i < num_process; i++) {
-            // 每个进程分配到的任务数量
+            // how many reads are assigned to task[i]
             task_num[i] =  num_of_reads / num_process;
             task_num[i] += i < num_of_reads % num_process ? 1 : 0;
 
-            // 分发reads_CSR_offset需要的数据
+            // scatter reads_CSR_offset
             reads_offs_len[i] = task_num[i] + 1;
             reads_offs_off[i] = off_offset;
             off_offset += task_num[i];
@@ -111,32 +107,37 @@ int main(int argc, char **argvs) {
             }   
             task_offset[i] = offset;
             offset += task_len[i];
-            // printf("[%d] task_len = %d, task_num = %d, task_offset = %d\n", i, task_len[i], task_num[i], task_offset[i]);
         }
     }
 
-    // scatter分配任务
-    // 分发num_of_reads
+    // scatter the data to each process
+    // scatter num_of_reads
     int local_reads_num;
     MPI_Scatter(task_num, 1, MPI_INT, &local_reads_num, 1, MPI_INT, 0, comm);
     
-    // 分发reads_CSR_offset
+    // scatter reads_CSR_offset
     int *local_offs = new int[local_reads_num+5];
     MPI_Scatterv(reads_CSR_offs, reads_offs_len, reads_offs_off, MPI_INT, local_offs, local_reads_num + 1, MPI_INT, 0, comm);
     
-    // 分发reads_CSR
+    // scatter reads_CSR
     int local_len = local_offs[local_reads_num] - local_offs[0];
     char *local_reads_CSR = new char[local_len+5];
     MPI_Scatterv(reads_CSR, task_len, task_offset, MPI_CHAR, local_reads_CSR, local_len, MPI_CHAR, 0, comm);
 
-    // 注意刚收到的offset，起点是按照原字符串算的。在每个进程里，起点都应该被重置为0
-    // printf("final offset %d\n", local_offs[local_reads_num]);
+    // set all offests to start at 0 for each processes
     for (size_t i = 0, start = local_offs[0]; i <= local_reads_num; i++) {
         local_offs[i] -= start;
     }
-    // printf("process %d has %d tasks, csv of length %d, range (%d, %d)\n", my_rank, local_reads_num, local_len, local_offs[0], local_offs[local_reads_num]);
 
-    // 处理自己的任务
+    if (my_rank == 0) {
+        delete [] task_len;
+        delete [] task_num;
+        delete [] task_offset;
+        delete [] reads_offs_off;
+        delete [] reads_offs_len;
+    }
+
+    // 2. Perform the super-mer generation in each process. 
     vector<string> local_supermers;
     for (size_t i = 0; i < local_reads_num; i++) {
         read2supermers(
@@ -146,56 +147,54 @@ int main(int argc, char **argvs) {
             local_supermers
         );
     }
-    // printf("this is process %d, range (%d, %d), %d results\n", my_rank, local_offs[0], local_offs[local_reads_num], local_supermers.size());
-
-    
 
     int local_size = local_supermers.size();
     char* local_supermers_CSR;
     int *local_supermers_CSR_offs;
-    vector<int> local_supermers_CSR_len(local_size);
     Vector2CSR(local_supermers, local_size, local_supermers_CSR, local_supermers_CSR_offs);
 
-
+    // append an end-of-string character
     local_supermers_CSR[local_supermers_CSR_offs[local_size]] = '\0';
 
+    // create a vector to store the length of each local_supermers_CSR
+    vector<int> local_supermers_CSR_len(local_size);
     for (int i = 0; i < local_size; i++){
         local_supermers_CSR_len[i] = local_supermers[i].size();
     }
 
-    // gather汇总任务
+    delete [] local_offs;
+    delete [] local_reads_CSR;
+
+    // 3. Gather all the super-mers to the root process
+    
+    // gather the number of supermers each process returns
     int *gather_size;
     if(my_rank == 0){
         gather_size = new int[num_process];
-        
     }
-    // 每个进程返回答案数量
     MPI_Gather(&local_size, 1, MPI_INT, gather_size, 1, MPI_INT, 0, comm);
     
+    // gather the length of every supermers from each process
     int total_size = 0;
     int *CSR_len_displs;
     int *gather_CSR_len;
     if(my_rank == 0) {
         int offset = 0;
-
         CSR_len_displs = new int[num_process];
         for (size_t i = 0; i < num_process; i++) {
-            printf("process %d has %d results\n", i, gather_size[i]);
+            // printf("process %d has %d results\n", i, gather_size[i]);
             total_size += gather_size[i];
             CSR_len_displs[i] = offset;
             offset += gather_size[i];
         }
 
-        printf("total results = %d\n", total_size);
+        // printf("total results = %d\n", total_size);
         gather_CSR_len = new int[total_size];
     }
-
-    // 尝试接收长度，而非offset。接收长度方便，收到后再处理
-    // MPI_Gatherv(local_supermers_CSR_offs, local_size + 1, MPI_INT, gather_CSR_offs, gather_offs_num, gather_offs_off, MPI_INT, 0, comm);
-
     MPI_Gatherv(local_supermers_CSR_len.data(), local_size, MPI_INT, gather_CSR_len, gather_size, CSR_len_displs, MPI_INT, 0, comm);
     
 
+    // gather the supermers_CSR from each process
     int total_CSR_len = 0;
     char* gather_CSR;
     int *recvcount, *displs;
@@ -212,13 +211,13 @@ int main(int argc, char **argvs) {
             displs[i] += offset;
             offset += recvcount[i];
         }
-        
         gather_CSR = new char[total_CSR_len + 10];
     }
 
     int len = local_supermers_CSR_offs[local_size] - local_supermers_CSR_offs[0];
     MPI_Gatherv(local_supermers_CSR, len, MPI_CHAR, gather_CSR, recvcount, displs, MPI_CHAR, 0, comm); 
     
+    // 4. store all supermers in the vector "all_supermers" and clean the resources
     if(my_rank == 0){
         gather_CSR[total_CSR_len] = '\0';
         for (size_t i = 0, j = 0, p = 0; i < num_process; i++) {
@@ -227,13 +226,15 @@ int main(int argc, char **argvs) {
                 p += gather_CSR_len[j];
             }
         }
-        delete []gather_size;
-        delete []gather_CSR_len;
-        delete []CSR_len_displs;
-        delete []gather_CSR;
-        delete []recvcount;
-        delete []displs;
+        delete [] gather_size;
+        delete [] gather_CSR_len;
+        delete [] CSR_len_displs;
+        delete [] gather_CSR;
+        delete [] recvcount;
+        delete [] displs;
     }
+    delete [] local_supermers_CSR;
+    delete [] local_supermers_CSR_offs;
     
     // ==============================================================
     // ====    Write your implementation only above this line    ====
