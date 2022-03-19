@@ -1,7 +1,7 @@
 /**********************************************************************
-    [NAME]:    
-    [STUDENT ID]: 
-    [EMAIL]: 
+    [NAME]: ZHU Huanqi   
+    [STUDENT ID]: 20786002
+    [EMAIL]: hzhuay@connect.ust.hk
     NOTICE: Write your own code only in this file.
 
     COMPILE: g++ -std=c++11 -lpthread gensupermer_pthread.cpp main.cpp -o pthread_gs
@@ -38,8 +38,21 @@ struct AllThings
         AllThings contains all arguments that are passed to the thread function.
     */
     /*========== Add elements and construct AllThings below this line ==========*/
-    
+    char *reads;
+    int *reads_offs;
+    int K, P;
+    // int N;  // number of reads;
+    // int T;  // number of threads
+    int start;      // start point in reads_offs
+    int task_num;   // the numer of tasks
+    long rank;
+    vector<string>* all_supermers;
+    pthread_mutex_t* mutex;
 
+    AllThings(char* rds, int* offs, int k, int p, int s, int t, int r, vector<string>* ans, pthread_mutex_t* m): 
+        reads(rds), reads_offs(offs), K(k), P(p), start(s), task_num(t), rank(r), all_supermers(ans), mutex(m) {}
+
+    AllThings() {}
 
     /*==========Add elements and construct AllThings above this line    ==========*/
 };
@@ -52,7 +65,26 @@ void *parallel(void *allthings)
         You can call the function read2supermers which has been implemented.
     */
     /*========== Fill the body of your thread function below this line ==========*/
+    AllThings& args = *((AllThings*) allthings);
+    vector<string>& result = *(args.all_supermers);
+
     
+    // printf("this is thread %d, I have %d reads to handle\n", args.rank, args.task_num);
+
+    // vector<string> local_reads(args.task_num);
+    vector<string> local_supermers;
+    for (size_t i = args.start, j = 0; j < args.task_num; i++, j++) {
+        // local_reads[j] = string(args.reads + args.reads_offs[i], args.reads_offs[i+1] - args.reads_offs[i]);
+        read2supermers(
+            args.reads + args.reads_offs[i], 
+            args.reads_offs[i+1] - args.reads_offs[i], 
+            args.K, args.P, local_supermers);
+    }
+
+    printf("this is thread %d, I get %d supermers\n", args.rank, local_supermers.size());
+    pthread_mutex_lock(args.mutex);
+    result.insert(result.end(), local_supermers.begin(), local_supermers.end());
+    pthread_mutex_unlock(args.mutex);
     /*========== Fill the body of your thread function above this line ==========*/
 
     return 0;
@@ -68,6 +100,25 @@ int gensupermers(char *reads, int *reads_offs, int K, int P, int num_of_reads, v
         Output: all_supermers - you need to save your results in the vector all_supermers
     */
     /*========== Fill in your code below this line ==========*/
+    pthread_t* thread_handles = new pthread_t[num_threads];
+    pthread_mutex_t mutex;
+    pthread_mutex_init(&mutex, NULL);
+    
+    AllThings alls[num_threads];
+    int start_point = 0;
+    for (long thread = 0; thread < num_threads; thread++) {
+        int task_num = num_of_reads / num_threads + ( thread < num_of_reads % num_threads ? 1 : 0 );
+        alls[thread] = AllThings(reads, reads_offs, K, P, start_point, task_num, thread, &all_supermers, &mutex);
+        start_point += task_num;
+        pthread_create(&thread_handles[thread], NULL, parallel, (void*) &alls[thread]);  
+    }
+
+    for (long thread = 0; thread < num_threads; thread++) 
+        pthread_join(thread_handles[thread], NULL); 
+    
+    printf("This is main thread, I collect %d supermers totally\n", all_supermers.size());
+
+    free(thread_handles);
 
     /*========== Fill in your code above this line ==========*/
 

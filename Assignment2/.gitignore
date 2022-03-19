@@ -32,6 +32,7 @@
 *.app
 
 /result/
+/dataset_larger/
 gs
 seq_gs
 MPIScatterv_demo.c
