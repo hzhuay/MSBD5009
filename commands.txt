@@ -1,9 +1,0 @@
-g++ gensupermer_sequential.cpp -o seq_gs -std=c++11 && ./seq_gs 21 7 ./dataset/dataset1.txt ./result/
-
-mpic++ -std=c++11 gensupermer_mpi.cpp -o gs && mpiexec -n 4 ./gs 21 7 ./dataset/dataset1.txt 1 ./result/
-
-
-g++ gensupermer_sequential.cpp -o seq_gs -std=c++11 && ./seq_gs 21 7 ./dataset_larger/dataset_2k.txt ./result/
-
-mpic++ -std=c++11 gensupermer_mpi.cpp -o gs && mpiexec -n 4 ./gs 21 7 ./dataset_larger/dataset_2k.txt 1 ./result/
-

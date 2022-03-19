@@ -45,7 +45,7 @@ struct AllThings
     // int T;  // number of threads
     int start;      // start point in reads_offs
     int task_num;   // the numer of tasks
-    long rank;
+    int rank;
     vector<string>* all_supermers;
     pthread_mutex_t* mutex;
 
@@ -81,7 +81,7 @@ void *parallel(void *allthings)
             args.K, args.P, local_supermers);
     }
 
-    printf("this is thread %d, I get %d supermers\n", args.rank, local_supermers.size());
+    printf("this is thread %d, I get %d supermers\n", args.rank, (int)local_supermers.size());
     pthread_mutex_lock(args.mutex);
     result.insert(result.end(), local_supermers.begin(), local_supermers.end());
     pthread_mutex_unlock(args.mutex);
@@ -100,25 +100,22 @@ int gensupermers(char *reads, int *reads_offs, int K, int P, int num_of_reads, v
         Output: all_supermers - you need to save your results in the vector all_supermers
     */
     /*========== Fill in your code below this line ==========*/
-    pthread_t* thread_handles = new pthread_t[num_threads];
+    pthread_t thread_handles[num_threads];
+    AllThings alls[num_threads];
     pthread_mutex_t mutex;
     pthread_mutex_init(&mutex, NULL);
-    
-    AllThings alls[num_threads];
     int start_point = 0;
-    for (long thread = 0; thread < num_threads; thread++) {
+    for (int thread = 0; thread < num_threads; thread++) {
         int task_num = num_of_reads / num_threads + ( thread < num_of_reads % num_threads ? 1 : 0 );
         alls[thread] = AllThings(reads, reads_offs, K, P, start_point, task_num, thread, &all_supermers, &mutex);
         start_point += task_num;
         pthread_create(&thread_handles[thread], NULL, parallel, (void*) &alls[thread]);  
     }
 
-    for (long thread = 0; thread < num_threads; thread++) 
+    for (int thread = 0; thread < num_threads; thread++) 
         pthread_join(thread_handles[thread], NULL); 
     
-    printf("This is main thread, I collect %d supermers totally\n", all_supermers.size());
-
-    free(thread_handles);
+    printf("This is main thread, I collect %d supermers totally\n", (int)all_supermers.size());
 
     /*========== Fill in your code above this line ==========*/
 

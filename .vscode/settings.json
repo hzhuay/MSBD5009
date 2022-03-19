@@ -3,6 +3,8 @@
         "*.md": "markdown",
         "new": "cpp",
         "array": "cpp",
-        "initializer_list": "cpp"
+        "initializer_list": "cpp",
+        "functional": "cpp",
+        "type_traits": "cpp"
     }
 }
