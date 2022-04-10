@@ -58,13 +58,101 @@ typedef struct {
     _out_ T_read_len *supermer_offs;     //the supermer offset array
 } T_GPU_data;
 
+__device__ unsigned int read2int(const char* read, size_t len){
+    // printf("%s\n", read);
+    unsigned int ret = 0;
+    for(size_t i = 0; i < len; i++){
+        ret = (ret << 2) | d_basemap[read[i]];
+    }
+    return ret;
+}
+
+__device__ char* int2read(unsigned int mm, char* read, int P){
+    for(int i = P - 1; i >= 0; i--) {
+        if((mm & 0b11) == 0) read[i] = 'A';
+        else if((mm & 0b11) == 1) read[i] = 'C';
+        else if((mm & 0b11) == 2) read[i] = 'G';
+        else if((mm & 0b11) == 3) read[i] = 'T';
+        mm >>= 2;
+    }
+    return read;
+}
+
+
 /*
  * [INPUT]  data.reads in [(Read#0), (Read#1)...]
  * [OUTPUT] data.minimizers in [(Read#0)[mm1, mm?, mm?, ...], (Read#1)...]
  */
 __global__ void GPU_GenMinimizer(_in_ _out_ T_GPU_data data, int K_kmer, int P_minimizer) {
-
+    typedef unsigned int uint;
     // Fill in the GPU_GenMinimizer function here
+    uint tid = blockDim.x * blockIdx.x + threadIdx.x;
+    uint tnum = blockDim.x * gridDim.x;
+    
+    uint mask = 0;
+    for (uint i = 0; i < P_minimizer; i++) {
+        mask = (mask << 2) | 0b11;
+    }
+
+    // Each thread should do tasks that (task_id % total_task_num == thread_id)
+    for (uint t = tid; t < data.cur_batch_size; t += tnum) {
+        char* read = data.reads + data.reads_offs[t];
+        uint read_len = data.read_len[t];
+        uint minimizer = read2int(read, P_minimizer);
+        uint new_minimizer = minimizer;
+        uint mm_begin_pos = 0;
+
+        // the index of minimizer in data.minimizers
+        uint mm_off = data.reads_offs[t];
+
+        // Generate the first k-mer's minimizer
+        for (uint i = P_minimizer; i < K_kmer; i++) {
+            new_minimizer = ((new_minimizer << 2) | d_basemap[read[i]]) & mask;
+            // printf("This is thread %d of totel %d, doing task %d, %u\n", tid, tnum, i, new_minimizer);
+            if(new_minimizer <= minimizer){
+                minimizer = new_minimizer;
+                mm_begin_pos = i - P_minimizer + 1;
+            }
+        }
+        
+        // set the first minimizer
+        data.minimizers[mm_off] = minimizer;
+        // printf("%d %s, begin at %u\n", minimizer, int2read(minimizer, buf, P_minimizer), mm_begin_pos);
+
+        // Continue generating minimizers:
+        // There will be (read_len - K_kmer + 1) minimizers and minimizer where (i = 0) is alreadly be generated.
+        for (uint i = 1; i < read_len - K_kmer + 1; i++) { // i: the beginning position of the current k-mer
+            // the previous minimizer is no longer available. new minimizer is required
+            if (i > mm_begin_pos) {
+
+                // 重复初次生成minimizer的步骤
+                minimizer = read2int(read + i, P_minimizer);
+                new_minimizer = minimizer;
+                // printf("New minimizer required. Index = %u, mm = %u %s, the read is %s\n", i, minimizer, int2read(minimizer, buf, P_minimizer), read+i);
+                for (uint j = i + P_minimizer; j < i + K_kmer; j++) {
+                    new_minimizer = ((new_minimizer << 2) | d_basemap[read[j]]) & mask;
+                    // printf("New minimizer required. Index = %u, new mm = %u %s\n", j, new_minimizer, int2read(new_minimizer, buf, P_minimizer));
+                    if (new_minimizer <= minimizer) {
+                        minimizer = new_minimizer;
+                        mm_begin_pos = j - P_minimizer + 1;
+                    }
+                }
+            } else {
+                new_minimizer = read2int(read + i + K_kmer - P_minimizer, P_minimizer);
+                // printf("New_minimizer 没失效. Index = %u, new mm = %u %s\n", i, new_minimizer, int2read(new_minimizer, buf, P_minimizer));
+
+                if (new_minimizer < minimizer) {
+                    minimizer = new_minimizer;
+                    mm_begin_pos = i + K_kmer - P_minimizer;
+                } else if (new_minimizer == minimizer) 
+                    mm_begin_pos = i + K_kmer - P_minimizer; // UPDATE1
+            }
+
+            // set minimizers for each iteration
+            data.minimizers[mm_off + i] = minimizer;
+            // printf("%d %s\n", minimizer, int2read(minimizer, buf, P_minimizer));
+        }
+    }
 
     return;
 }
@@ -76,6 +164,29 @@ __global__ void GPU_GenMinimizer(_in_ _out_ T_GPU_data data, int K_kmer, int P_m
 __global__ void GPU_GenSKM(_in_ _out_ T_GPU_data data, int K_kmer, int P_minimizer) {
 
     // Fill in the GPU_GenSKM function here
+    typedef unsigned int uint;
+
+    uint tid = blockDim.x * blockIdx.x + threadIdx.x;
+    uint tnum = blockDim.x * gridDim.x;
+    uint minimizer;
+
+    for (uint t = tid; t < data.cur_batch_size; t += tnum) {
+        char* read = data.reads + data.reads_offs[t];
+        uint read_len = data.read_len[t];
+        uint mm_off = data.reads_offs[t];
+        uint prev_mm = UINT_MAX;
+        uint cnt = mm_off;
+
+        for (uint i = 0; i < read_len - K_kmer + 1; i++) { 
+            minimizer = data.minimizers[mm_off + i];
+            if (prev_mm != minimizer) {
+                data.supermer_offs[cnt++] = i;
+                prev_mm = minimizer;
+            }
+        }
+
+        data.supermer_offs[cnt] = read_len - K_kmer + 1;
+    }
 
     return;
 }
@@ -127,7 +238,6 @@ void GenerateSupermer_GPU(vector<string> &reads, int K, int P, vector<string> &a
     // [Computing]
     GPU_GenMinimizer<<<NUM_BLOCKS_PER_GRID, NUM_THREADS_PER_BLOCK/*, 0, cuda_stream*/>>>(d_batch_data, K, P);
     GPU_GenSKM<<<NUM_BLOCKS_PER_GRID, NUM_THREADS_PER_BLOCK/*, 0, cuda_stream*/>>>(d_batch_data, K, P);
-
     cudaDeviceSynchronize();
 
     // [Data D2H]
@@ -137,6 +247,7 @@ void GenerateSupermer_GPU(vector<string> &reads, int K, int P, vector<string> &a
     GPUErrChk(cudaMemcpy(h_batch_data.minimizers, d_batch_data.minimizers, sizeof(T_minimizer) * (csr_reads.size()), cudaMemcpyDeviceToHost));
     GPUErrChk(cudaMemcpy(h_batch_data.supermer_offs, d_batch_data.supermer_offs, sizeof(T_read_len) * (csr_reads.size()), cudaMemcpyDeviceToHost));
     cudaDeviceSynchronize();
+
     // GPUErrChk(cudaStreamSynchronize(cuda_stream));
     GPUErrChk(cudaFree(d_batch_data.reads));
     GPUErrChk(cudaFree(d_batch_data.reads_offs));
